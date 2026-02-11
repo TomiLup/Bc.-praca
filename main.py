@@ -40,4 +40,4 @@ for i in range(1, len(samples)):
             period = samples[start:i]
             break
 
-print("One period samples:", len(period))
+print ("One period samples:", len(period))

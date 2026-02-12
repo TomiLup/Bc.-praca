@@ -1,50 +1,50 @@
 import time
-import requests
-import numpy as np
+from influxdb_client import InfluxDBClient, Point, WritePrecision
+from influxdb_client.client.write_api import SYNCHRONOUS
 from drivers import redpitaya_scpi as scpi
 
-# --- KONFIGURÁCIA ---
+# --- KONFIGURÁCIA (Podľa tvojho dotazu) ---
+TOKEN = "etdYIRq-pf7b7m6YVlmRj9kvb1A_yfaCE03nhJBXw3QMbPkOkCS0RZHavWtOCQGI66v8jVMArW-G_bXDZprQ7w=="
+ORG = "99fe279016e68f6d"
+BUCKET = "Osciloskop"  # Musí sedieť s from(bucket: "Osciloskop")
 IP = "169.254.4.198"
-TOKEN = "-0NGryDI1atHgmjh3dNMBWrX8KfDczg1GX7p8TGyvHnGt0w8p_wgVHqT6kTLvafOLrTF5-_PV46SzlSldp5Fw=="
-INFLUX_URL = "http://localhost:8086/api/v2/write?org=MojeLab&bucket=Bc.%20praca&precision=ns"
-HEADERS = {"Authorization": f"Token {TOKEN}"}
 
-rp = scpi.scpi(IP)
+client = InfluxDBClient(url="http://localhost:8086", token=TOKEN, org=ORG)
+write_api = client.write_api(write_options=SYNCHRONOUS)
 
-def capture_to_influx(seconds=60):
-    rp.tx_txt("ACQ:RST")
-    rp.tx_txt("ACQ:DEC 64")
-    
-    fs = 125e6 / 64
-    dt_ns = int((1/fs) * 1e9)
-    
-    start_loop = time.time()
-    print("Zber beží... Sleduj InfluxDB.")
+try:
+    rp = scpi.scpi(IP)
+    print("Zber štartuje...")
 
-    while (time.time() - start_loop) < seconds:
+    # Urobíme 10-sekundový zber
+    start_time = time.time()
+    while (time.time() - start_time) < 10:
         rp.tx_txt("ACQ:START")
         rp.tx_txt("ACQ:TRIG NOW")
-        
-        # Čakanie na naplnenie buffera (cca 8ms pri DEC 64)
-        time.sleep(0.01) 
+        time.sleep(0.02)
         
         rp.tx_txt("ACQ:SOUR1:DATA?")
         raw = rp.rx_txt().strip("{}\n\r ")
         
         if not raw: continue
-        
+            
         samples = raw.split(",")
-        t_start = time.time_ns()
+        t_now = time.time_ns()
         
-        # Tvorba Line Protocolu
-        lines = [f"osciloskop,chan=ch1 volt={v} {t_start + (i * dt_ns)}" 
-                 for i, v in enumerate(samples) if v]
+        batch = []
+        for i, v in enumerate(samples[:1000]): # Berieme 1000 vzoriek pre rýchlosť
+            # TU JE TO NAJDÔLEŽITEJŠIE: Musí to sedieť s tvojím filter(fn: ...)
+            p = Point("test_signalu") \
+                .field("napatie", float(v)) \
+                .time(t_now + (i * 512), WritePrecision.NS)
+            batch.append(p)
         
-        # Odoslanie do Influxu
-        res = requests.post(INFLUX_URL, data="\n".join(lines), headers=HEADERS)
-        if res.status_code != 204:
-            print(f"Chyba: {res.status_code}, {res.text}")
+        write_api.write(bucket=BUCKET, org=ORG, record=batch)
+        print(f"Odoslaný balík dát do {BUCKET}...")
 
-    print("Zber dokončený.")
+    print("Hotovo!")
 
-capture_to_influx(60)
+except Exception as e:
+    print(f"Chyba: {e}")
+finally:
+    client.close()
